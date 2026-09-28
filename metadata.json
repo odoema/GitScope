@@ -1,0 +1,6 @@
+{
+  "name": "GitScope - GitHub Repository Inspector",
+  "description": "Connect to GitHub to explore, inspect, and analyze repositories, codebases, commits, branches, issues, and file structures in real time.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
