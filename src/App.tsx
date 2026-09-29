@@ -7,6 +7,7 @@ import {
   fetchRepoBranches,
   fetchRepoReadme,
   subscribeRateLimit,
+  getStoredToken,
 } from './services/github';
 import { Header } from './components/Header';
 import { RepoHeader } from './components/RepoHeader';
@@ -18,6 +19,7 @@ import { ReleasesList } from './components/ReleasesList';
 import { InsightsView } from './components/InsightsView';
 import { RepoDiscovery } from './components/RepoDiscovery';
 import { TokenModal } from './components/TokenModal';
+import { MyGitHub } from './components/MyGitHub';
 import { CloneModal } from './components/CloneModal';
 import { CommandPalette } from './components/CommandPalette';
 import { AIChatDrawer } from './components/AIChatDrawer';
@@ -39,6 +41,8 @@ export default function App() {
 
   // Modals & Drawers
   const [tokenModalOpen, setTokenModalOpen] = useState(false);
+  // Bumped whenever the GitHub connection changes so token-dependent UI re-renders
+  const [authVersion, setAuthVersion] = useState(0);
   const [cloneModalOpen, setCloneModalOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [aiChatOpen, setAiChatOpen] = useState(false);
@@ -109,9 +113,10 @@ export default function App() {
     if (repoParam && repoParam.includes('/')) {
       const [o, r] = repoParam.split('/');
       loadRepository(o, r);
-    } else {
+    } else if (!getStoredToken()) {
       loadRepository('odoema', 'niletropical');
     }
+    // Connected users with no ?repo land on the "My GitHub" home
   }, []);
 
   // Load a repository
@@ -264,7 +269,16 @@ export default function App() {
 
         {/* Home / Discovery View */}
         {!loading && !error && !repoData && (
-          <RepoDiscovery onSelectRepo={loadRepository} recentRepos={recentRepos} />
+          <div className="space-y-10">
+            {getStoredToken() && (
+              <MyGitHub
+                key={authVersion}
+                onSelectRepo={loadRepository}
+                onOpenTokenModal={() => setTokenModalOpen(true)}
+              />
+            )}
+            <RepoDiscovery onSelectRepo={loadRepository} recentRepos={recentRepos} />
+          </div>
         )}
 
         {/* Active Repository Inspector View */}
@@ -402,7 +416,11 @@ export default function App() {
         onClose={() => setTokenModalOpen(false)}
         rateLimit={rateLimit}
         onTokenChanged={() => {
-          if (currentSlug) {
+          setAuthVersion((v) => v + 1);
+          if (currentSlug && repoData) {
+            loadRepository(currentSlug.owner, currentSlug.repo, selectedBranch);
+          } else if (currentSlug) {
+            // A previous load failed (e.g. private repo) - retry now that the token changed
             loadRepository(currentSlug.owner, currentSlug.repo, selectedBranch);
           }
         }}

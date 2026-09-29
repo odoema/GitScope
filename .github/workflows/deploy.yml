@@ -26,11 +26,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
+      # --legacy-peer-deps: vite 8 declares an optional esbuild peer range that
+      # conflicts with the pinned devDependency; the build is unaffected.
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       - name: Build Vite SPA
         run: npm run build

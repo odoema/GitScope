@@ -485,3 +485,90 @@ export const triggerWorkflowDispatch = async (
     };
   }
 };
+
+// ─────────────────────────────────────────────────────────────
+// Authenticated-user ("My GitHub") endpoints
+// ─────────────────────────────────────────────────────────────
+
+export interface GitHubUser {
+  login: string;
+  id: number;
+  avatar_url: string;
+  html_url: string;
+  name: string | null;
+  bio: string | null;
+  company: string | null;
+  location: string | null;
+  public_repos: number;
+  followers: number;
+  following: number;
+  total_private_repos?: number;
+  owned_private_repos?: number;
+}
+
+export interface GitHubOrg {
+  login: string;
+  id: number;
+  avatar_url: string;
+  description: string | null;
+}
+
+export type MyRepoSort = 'updated' | 'pushed' | 'full_name' | 'created';
+
+export const fetchAuthenticatedUser = async (): Promise<GitHubUser> => {
+  return ghFetch<GitHubUser>('/user');
+};
+
+export const fetchMyOrgs = async (): Promise<GitHubOrg[]> => {
+  try {
+    return await ghFetch<GitHubOrg[]>('/user/orgs?per_page=50');
+  } catch {
+    return []; // token may lack read:org
+  }
+};
+
+/**
+ * Repos the signed-in account can access: owned, collaborator, and org-member repos
+ * (including private ones when the token has `repo` scope).
+ */
+export const fetchMyRepos = async (
+  page: number = 1,
+  sort: MyRepoSort = 'updated',
+  perPage: number = 50
+): Promise<GitHubRepo[]> => {
+  const params = new URLSearchParams({
+    per_page: String(perPage),
+    page: String(page),
+    sort,
+    direction: sort === 'full_name' ? 'asc' : 'desc',
+    affiliation: 'owner,collaborator,organization_member',
+  });
+  return ghFetch<GitHubRepo[]>(`/user/repos?${params}`);
+};
+
+// Cache the verified user so the header can render an avatar without refetching
+const USER_KEY = 'gitscope_gh_user';
+
+export const getCachedUser = (): GitHubUser | null => {
+  try {
+    const raw = localStorage.getItem(USER_KEY);
+    return raw ? (JSON.parse(raw) as GitHubUser) : null;
+  } catch {
+    return null;
+  }
+};
+
+export const setCachedUser = (user: GitHubUser | null): void => {
+  try {
+    if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
+    else localStorage.removeItem(USER_KEY);
+  } catch {
+    // ignore
+  }
+};
+
+/** Clears the token and any cached identity. */
+export const disconnectGitHub = (): void => {
+  setStoredToken('');
+  setCachedUser(null);
+};

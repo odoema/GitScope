@@ -10,7 +10,7 @@ import {
   Sparkles,
   Database,
 } from 'lucide-react';
-import { RateLimitState, parseGitHubUrlOrSlug, getStoredToken } from '../services/github';
+import { RateLimitState, parseGitHubUrlOrSlug, getStoredToken, getCachedUser } from '../services/github';
 
 interface HeaderProps {
   onSearchRepo: (owner: string, repo: string) => void;
@@ -33,6 +33,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const [inputVal, setInputVal] = useState('');
   const hasToken = !!getStoredToken();
+  const cachedUser = hasToken ? getCachedUser() : null;
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -143,13 +144,17 @@ export const Header: React.FC<HeaderProps> = ({
           >
             {hasToken ? (
               <>
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Connected</span>
+                {cachedUser ? (
+                  <img src={cachedUser.avatar_url} alt="" className="w-4 h-4 rounded-full" />
+                ) : (
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                )}
+                <span className="hidden sm:inline">{cachedUser ? cachedUser.login : 'Connected'}</span>
               </>
             ) : (
               <>
                 <Key className="w-3.5 h-3.5" />
-                <span>Connect Token</span>
+                <span>Connect GitHub</span>
               </>
             )}
           </button>

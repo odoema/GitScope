@@ -2,6 +2,7 @@ import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 
 dotenv.config();
@@ -198,6 +199,118 @@ app.post('/api/generate-image', async (req, res) => {
     res.status(500).json({
       error: error.message || 'Failed to generate image.',
     });
+  }
+});
+
+
+/**
+ * ─────────────────────────────────────────────────────────────
+ * GitHub OAuth (popup flow)
+ * ─────────────────────────────────────────────────────────────
+ * Setup: create an OAuth App at https://github.com/settings/developers
+ *   Homepage URL:      APP_URL
+ *   Callback URL:      APP_URL/auth/github/callback
+ * Then set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET (server-side secrets only).
+ * The client secret never reaches the browser; only the resulting access token does.
+ */
+const GH_CLIENT_ID = process.env.GITHUB_CLIENT_ID || '';
+const GH_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || '';
+const GH_SCOPES = process.env.GITHUB_OAUTH_SCOPES || 'repo read:user read:org workflow';
+const STATE_TTL_MS = 10 * 60 * 1000;
+
+const oauthConfigured = () => Boolean(GH_CLIENT_ID && GH_CLIENT_SECRET);
+
+const getBaseUrl = (req: express.Request): string => {
+  if (process.env.APP_URL && !process.env.APP_URL.startsWith('MY_')) {
+    return process.env.APP_URL.replace(/\/$/, '');
+  }
+  const proto = (req.headers['x-forwarded-proto'] as string)?.split(',')[0] || req.protocol;
+  return `${proto}://${req.get('host')}`;
+};
+
+// Stateless, HMAC-signed `state` (survives multiple Cloud Run instances and third-party-cookie blocking)
+const signState = (): string => {
+  const payload = `${crypto.randomBytes(16).toString('hex')}.${Date.now()}`;
+  const sig = crypto.createHmac('sha256', GH_CLIENT_SECRET).update(payload).digest('hex');
+  return `${payload}.${sig}`;
+};
+
+const verifyState = (state: unknown): boolean => {
+  if (typeof state !== 'string') return false;
+  const parts = state.split('.');
+  if (parts.length !== 3) return false;
+  const [nonce, ts, sig] = parts;
+  const expected = crypto.createHmac('sha256', GH_CLIENT_SECRET).update(`${nonce}.${ts}`).digest('hex');
+  const a = Buffer.from(sig, 'hex');
+  const b = Buffer.from(expected, 'hex');
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+  return Date.now() - Number(ts) < STATE_TTL_MS;
+};
+
+const safeJson = (v: unknown) => JSON.stringify(v).replace(/</g, '\\u003c');
+
+const popupResultPage = (origin: string, payload: Record<string, unknown>) => `<!doctype html>
+<html><head><meta charset="utf-8"><title>GitHub sign-in</title>
+<style>body{font-family:system-ui,sans-serif;background:#0d1117;color:#c9d1d9;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}</style>
+</head><body><p>${payload.error ? 'Sign-in failed. You can close this window.' : 'Connected to GitHub. Closing…'}</p>
+<script>
+  (function () {
+    var msg = ${safeJson({ type: 'GITSCOPE_GITHUB_OAUTH', ...payload })};
+    if (window.opener) { window.opener.postMessage(msg, ${safeJson(origin)}); }
+    setTimeout(function () { window.close(); }, 600);
+  })();
+</script></body></html>`;
+
+app.get('/api/auth/github/status', (_req, res) => {
+  res.json({ configured: oauthConfigured(), scopes: GH_SCOPES });
+});
+
+app.get('/api/auth/github/url', (req, res) => {
+  if (!oauthConfigured()) {
+    return res.status(501).json({
+      error: 'GitHub OAuth is not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET, or use a Personal Access Token.',
+    });
+  }
+  const params = new URLSearchParams({
+    client_id: GH_CLIENT_ID,
+    redirect_uri: `${getBaseUrl(req)}/auth/github/callback`,
+    scope: GH_SCOPES,
+    state: signState(),
+    allow_signup: 'false',
+  });
+  res.json({ url: `https://github.com/login/oauth/authorize?${params}` });
+});
+
+app.get(['/auth/github/callback', '/api/auth/github/callback'], async (req, res) => {
+  const origin = new URL(getBaseUrl(req)).origin;
+  const send = (payload: Record<string, unknown>) =>
+    res.status(payload.error ? 400 : 200).type('html').send(popupResultPage(origin, payload));
+
+  if (!oauthConfigured()) return send({ error: 'OAuth not configured.' });
+
+  const { code, state, error, error_description } = req.query as Record<string, string>;
+  if (error) return send({ error: error_description || error });
+  if (!code || !verifyState(state)) return send({ error: 'Invalid or expired OAuth state. Please try again.' });
+
+  try {
+    const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: GH_CLIENT_ID,
+        client_secret: GH_CLIENT_SECRET,
+        code,
+        redirect_uri: `${getBaseUrl(req)}/auth/github/callback`,
+      }),
+    });
+    const data: any = await tokenRes.json();
+    if (!data.access_token) {
+      return send({ error: data.error_description || data.error || 'GitHub did not return a token.' });
+    }
+    return send({ token: data.access_token, scope: data.scope || '' });
+  } catch (e: any) {
+    console.error('GitHub OAuth callback error:', e);
+    return send({ error: e.message || 'Token exchange failed.' });
   }
 });
 
